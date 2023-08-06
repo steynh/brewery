@@ -1,0 +1,86 @@
+#!/bin/zsh
+
+# check if command is run for `formulae` or `casks`, default is `formulae`
+if [ $1 = "--cask" ]
+then
+    cask=true
+    shift
+    packages_d=$HOME/.config/brewery/casks.d
+    cask_option="--cask"
+else
+    packages_d=$HOME/.config/brewery/formulae.d
+    cask_option=""
+fi
+
+list_desired() {
+    all_packages=""
+
+    for file in $packages_d/*
+    do
+        packages=$(cat $file)
+
+        # validate file content
+        grep_result=$(echo -n $packages | grep -Env '^(\? )?([a-zA-Z0-9_./@+]|-)*(\s*#.*)?$')
+        if [ ! -z "$grep_result" ]
+        then
+            echo "Error: syntax error in \"$file\" on these lines:\n$grep_result" >&2
+            exit 1
+        fi
+
+        all_packages+=$packages
+        all_packages+="\n"
+    done
+
+    # strip comments and empty lines (and remove `?` optionals for now)
+    echo $all_packages | sed -r "/^(#.*)?\$/d" | sed -r "s/([^#]*)[[:space:]]*#.*/\1/" | sed "/? .*/d" | sed "s/[[:space:]]//g" | sort
+}
+
+list_installed() {
+    if [ "$cask" = true ]
+    then
+        brew info --cask --installed --json=v2 | jq -r '.casks | map(.full_token) | .[]' | sort
+    else
+        brew info --installed --json=v2 | jq -r '.formulae | map(select(.installed[0].installed_on_request == true) | .full_name) | .[]' | sort
+    fi
+}
+
+list_missing() {
+    grep -Fvx -f <(list_installed) <(list_desired)
+}
+
+list_extra() {
+    grep -Fvx -f <(list_desired) <(list_installed)
+}
+
+install_missing() {
+    brew install $cask_option $(list_missing)
+}
+
+install_all() {
+    brew install $cask_option $(list_desired)
+}
+
+cleanup() {
+    brew uninstall $cask_option $(list_extra)
+}
+
+help() {
+    echo "Check script contents for help."
+}
+
+subcommand=$(echo "$1" | sed "s/-/_/g")
+shift
+case $subcommand in
+    "" | "-h" | "--help")
+        help
+        ;;
+    *)
+        if declare -f "$subcommand" >/dev/null 2>&1; then
+            ${subcommand} $@
+        else
+            echo "Error: '$subcommand' is not a valid subcommand." >&2
+            exit 1
+        fi
+        ;;
+esac
+
